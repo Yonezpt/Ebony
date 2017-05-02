@@ -1,5 +1,5 @@
-// ==UserScript==
-// @version         0.1.2
+﻿// ==UserScript==
+// @version         0.1.3
 // @name            Block YouTube Videos
 // @namespace       https://github.com/ParticleCore
 // @description     YouTube less annoying
@@ -21,14 +21,81 @@
     "use strict";
     function inject(is_userscript) {
 
+        function iterator2(main, list, tags) {
+            var i;
+            var del;
+            var obj;
+            var prop;
+            var browseId;
+            var different;
+            var canonicalBaseUrl;
+
+            if (main instanceof Array) {
+                for (i = 0; i < main.length; i++) {
+                    del = iterator2(main[i], list, tags);
+                    
+                    if (del === true) {
+                        main.splice(i--, 1);
+                    }
+                }
+            } else {
+                for (prop in main) {
+                    if (tags.indexOf(prop) > -1) {
+                        obj = JSON.stringify(main);
+                        browseId = obj && obj.match(/browseId":"([a-z0-9-_]{24})"/i);
+                        canonicalBaseUrl = obj && obj.match(/canonicalBaseUrl":"([a-z0-9-_/]+)"/i);
+
+                        if (prop === "shelfRenderer") {
+                            console.log(main, obj && obj.match(/browseId":"([a-z0-9-_]{24})"/i));
+
+                            if (!browseId) {
+                                return true;
+                            }
+                        } else if (prop === "itemSectionRenderer") {
+
+                            if (window.location.pathname !== "/results" && browseId && browseId[1] in list) {
+                                browseId = obj && obj.match(/browseId":"([a-z0-9-_]{24})"/ig);
+                                different = false;
+
+                                for (i = 0; i < browseId.length; i++) {
+                                    if (browseId[i] !== browseId[0]) {
+                                        different = true;
+                                        break;
+                                    }
+                                }
+
+                                if (!different) {
+                                    return true;
+                                }
+
+                                console.log(main, browseId);
+                            }
+                        } else {
+
+                            if (browseId && browseId[1] in list) {
+                                console.log(browseId[1], canonicalBaseUrl && canonicalBaseUrl[1]);
+                                return true;
+                            } else {
+                                break;
+                            }
+
+                        }
+                    } else if (main[prop] instanceof Object || main[prop] instanceof Array) {
+                        iterator2(main[prop], list, tags);
+                    }
+                }
+            }
+        }
+
         function iterator(obj, stack) {
-            var i, j, temp, tags, found, property;
+            var i, j, k, temp, tags, match, found, property;
             tags = [
                 "channelRenderer",
                 "playlistRenderer",
                 "radioRenderer",
                 "showRenderer",
                 "videoRenderer",
+                "shelfRenderer",
                 "gridChannelRenderer",
                 "gridMoviePlaylistRenderer",
                 "gridMovieRenderer",
@@ -37,7 +104,8 @@
                 "gridShowRenderer",
                 "gridVideoRenderer"
             ];
-            if (obj.constructor === Array) {
+            if (Array.isArray(obj)) {
+            // if (obj.constructor === Array) {
                 for (i = 0; i < obj.length; i++) {
                     if (typeof obj[i] == "object") {
                         if (obj[i].itemSectionRenderer) {
@@ -58,8 +126,24 @@
                                     temp = obj[i][tags[j]].shortBylineText || obj[i][tags[j]].longBylineText;
                                     temp = temp && temp.runs && temp.runs[0];
                                     temp = temp && (temp.navigationEndpoint && temp.navigationEndpoint.browseEndpoint && temp.navigationEndpoint.browseEndpoint.browseId || temp.text);
-                                    //console.log(temp);
-                                    if (temp && blocked_channels[temp]) {
+                                    if (tags[j] === "shelfRenderer") {
+                                        temp = obj[i][tags[j]].content;
+                                        temp = temp && temp.verticalListRenderer;
+                                        temp = temp && temp.items;
+                                        if (temp) {
+                                            for (k = 0; k < temp.length; k++) {
+                                                match = JSON.stringify(temp[i]);
+                                                match = match && match.match(/browseId":"([a-zA-Z0-9-_]{24})"/i);
+                                                if (match && match[1] && blocked_channels[match[1]]) {
+                                                    temp.splice(k--, 1);
+                                                }
+                                            }
+                                            if (temp.length === 0) {
+                                                console.log("iterator", obj[i]);
+                                                obj.splice(i--, 1);
+                                            }
+                                        }
+                                    } else if (temp && blocked_channels[temp]) {
                                         obj.splice(i--, 1);
                                         empty = obj.length;
                                     } else {
@@ -86,18 +170,16 @@
                 }
             }
         }
-        function checkParse(orig) {
-            return function() {
-                var temp = orig.apply(this, arguments);
-                //console.log(this, arguments);
-                //console.log(temp);
-                if (temp.response) {
-                    iterator(temp.response, "response");
-                }
+        function checkParse(original) {
+            return function(text, reviver) {
+                var temp = original.apply(this, arguments);
+                // iterator(temp, "temp");
+                iterator2(temp, blocked_channels, tags_section);
+                iterator2(temp, blocked_channels, tags);
+                iterator2(temp, blocked_channels, tags_shelf);
                 return temp;
             };
         }
-
         function getEmptyContainers() {
             var i, temp, container;
             container = document.querySelectorAll(container_nodes);
@@ -124,9 +206,9 @@
             //console.info(container);
             for (i = 0; i < container.length; i++) {
                 temp = container[i].data;
-                temp = temp && temp.contents[0];
+                temp = temp && temp.contents && temp.contents[0];
                 temp = temp && temp.shelfRenderer;
-                if (temp) {
+                if (temp && temp.endpoint && temp.endpoint.browseEndpoint) {
                     ucid = temp.endpoint.browseEndpoint.browseId;
                     if (blocked_channels[ucid]) {
                         //console.log(ucid);
@@ -226,7 +308,7 @@
                     containers: []
                 };
                 globals = {
-                    hasContainers: window.location.pathname === "/"
+                    hasContainers: window.location.pathname === "/" || window.location.pathname === "/results"
                 };
                 window.c = ignore;
             }
@@ -239,9 +321,8 @@
             }
             console.log("blacklist");
         }
-
         function addToBlacklist(event) {
-            var ucid, brand, parent;
+            var ucid, brand, parent, base_url;
             if (event.target.tagName === "BYTV") {
                 event.preventDefault();
                 parent = event.target.parentNode;
@@ -252,9 +333,11 @@
                             ucid = ucid.runs[0];
                             brand = ucid.text;
                             if (ucid.navigationEndpoint) {
+                                base_url = ucid.navigationEndpoint.browseEndpoint.canonicalBaseUrl;
                                 ucid = ucid.navigationEndpoint.browseEndpoint.browseId;
                             } else {
                                 ucid = "YouTube";
+                                base_url = "/user/youtube";
                             }
                         }
                         break;
@@ -263,16 +346,17 @@
                 }
                 if (ucid && brand) {
                     blocked_channels[ucid] = brand;
+                    if (base_url) {
+                        blocked_channels_canonical[base_url] = brand;
+                    }
                     blacklist();
                 }
             }
             console.log("addToBlacklist");
         }
-        function ini(event) {
-            var i, j, temp, node;
-            if (document.readyState !== "interactive") {
-                return;
-            }
+        function interceptImportNode(original) {
+            var node;
+
             node = document.createElement("bytv");
             node.title = "Add to blacklist";
             node.className = "bytc-add-to-blacklist";
@@ -280,29 +364,68 @@
                 "<svg viewBox='0 0 24 24'>" +
                 "    <polygon points='24,2.1 21.9,0 12,9.9 2.1,0 0,2.1 9.9,12 0,21.9 2.1,24 12,14.1 21.9,24 24,21.9 14.1,12'/>" +
                 "</svg>";
-            temp = document.querySelectorAll(
+
+            return function(externalNode, deep) {
+                var temp = externalNode.querySelector("*");
+
+                if (temp && (temp.id === "thumbnail" || temp.id === "img")) {
+                    if (!temp.parentNode.querySelector(".bytc-add-to-blacklist")) {
+                        if (temp.id === "img") {
+                            temp.parentNode.appendChild(node.cloneNode(true));
+                        } else {
+                            temp.appendChild(node.cloneNode(true));
+                        }
+                    }
+                }
+
+                return original.apply(this, arguments);
+            };
+        }
+        function ini(event, polymer) {
+            var i, j, temp, node, main_doc;
+            /*if (document.readyState !== "interactive") {
+                return;
+            }*/
+            console.log("ini", document.readyState, window.ytInitialData);
+            // iterator(window.ytInitialData, "ytInitialData");
+            /*if (!(main_doc = polymer)) {
+                main_doc = document;
+            } else {
+                main_doc = main_doc.import.documentElement;
+            }
+            console.log(1, main_doc, main_doc.querySelectorAll(
                 "#ytd-thumbnail template," +
                 "#ytd-channel-renderer template," +
                 "#ytd-playlist-thumbnail template"
-            );
-            i = temp.length;
-            while (i--) {
-                j = temp[i].content.querySelector(
-                    "#avatar," +
-                    "#thumbnail"
+            ));
+            if (main_doc) {
+                node = document.createElement("bytv");
+                node.title = "Add to blacklist";
+                node.className = "bytc-add-to-blacklist";
+                node.innerHTML = //
+                    "<svg viewBox='0 0 24 24'>" +
+                    "    <polygon points='24,2.1 21.9,0 12,9.9 2.1,0 0,2.1 9.9,12 0,21.9 2.1,24 12,14.1 21.9,24 24,21.9 14.1,12'/>" +
+                    "</svg>";
+                temp = main_doc.querySelectorAll(
+                    "#ytd-thumbnail template," +
+                    "#ytd-channel-renderer template," +
+                    "#ytd-playlist-thumbnail template"
                 );
-                if (j) {
-                    j.appendChild(node.cloneNode(true));
+                i = temp.length;
+                while (i--) {
+                    j = temp[i].content.querySelector(
+                        "#avatar," +
+                        "#thumbnail"
+                    );
+                    if (j) {
+                        j.appendChild(node.cloneNode(true));
+                    }
                 }
-            }
-            /*if (temp && temp.content) {
-                temp.content.appendChild(node.cloneNode(true));
+                iterator(window.ytInitialData, "ytInitialData");
             }*/
-            //blacklist(event);
-            iterator(window.ytInitialData, "ytInitialData");
         }
 
-        var empty, ignore, globals, tag_list, video_nodes, container_nodes, blocked_channels;
+        var empty, ignore, globals, tag_list, video_nodes, container_nodes, blocked_channels, blocked_channels_canonical;
 
         tag_list = [
             "YTD-COMPACT-LINK-RENDERER",
@@ -326,22 +449,134 @@
             "YTD-VIDEO-RENDERER"
         ];
 
+        var tags_section = [
+            "itemSectionRenderer"
+        ];
+
+        var tags = [
+            "channelRenderer",
+            "playlistRenderer",
+            "radioRenderer",
+            "showRenderer",
+            "videoRenderer",
+            "gridChannelRenderer",
+            "gridMoviePlaylistRenderer",
+            "gridMovieRenderer",
+            "gridPlaylistRenderer",
+            "gridRadioRenderer",
+            "gridShowRenderer",
+            "gridVideoRenderer"
+        ];
+
+        var tags_shelf = [
+            "shelfRenderer"
+        ];
+
         video_nodes = tag_list.join(",");
 
-        container_nodes = "#contents ytd-item-section-renderer"; // material
+        container_nodes = [
+            "#contents ytd-item-section-renderer",
+            "#contents ytd-shelf-renderer"
+        ].join(",");
 
-        blocked_channels = {};
+        blocked_channels = {
+        };
+
+        blocked_channels_canonical = {};
+
         window.b = blocked_channels;
+        window.b_c = blocked_channels_canonical;
 
         JSON.parse = checkParse(JSON.parse);
 
+        /*window.ytInitialData = {};
+
+        window.ytInitialData.set = function(data) {
+            this._data = this.data;
+            iterator(this._data, "data");
+        };
+        window.ytInitialData.get = function() {
+            return this._data;
+        };*/
+
+        /*window.ytInitialData = {
+            set: function(data) {
+                console.log(99, data);
+                this._data = {};
+                // this._data = this.data;
+            },
+            get: function() {
+                return this._data;
+            }
+        };*/
+
+        /*window.ytInitialData = {};
+
+        Object.defineProperty(window, "ytInitialData", {
+            get: function() {
+                // return this._data;
+                return this._data;
+            },
+            set: function(data) {
+                // this._data = {};
+                // this._data = this.data;
+                this._data = this.data;
+                iterator(this._data, "data");
+            }
+        });*/
+
+        /*function detourLoadDataHook(original) {
+            return function(endpoint, data) {
+                var args = arguments;
+                iterator(args, "args");
+                return original.apply(this, args);
+            };
+        }*/
+
+        Object.defineProperty(Window.prototype, "ytInitialData",{
+            set: function(data){
+                console.log("property", data);
+                this._data = data;
+                // iterator(this._data, "_data");
+                iterator2(this._data, blocked_channels, tags_section);
+                iterator2(this._data, blocked_channels, tags);
+                iterator2(this._data, blocked_channels, tags_shelf);
+            },
+            get: function(){
+                return this._data;
+            }
+        });
+
+        /*function detourLoadData(original) {
+            return function(endpoint, data) {
+                // console.log("detourLoadData", endpoint, data);
+                // iterator(data, "data");
+                return original.apply(this, arguments);
+            };
+        }*/
+
         document.addEventListener("click", addToBlacklist, true);
-        document.addEventListener("readystatechange", ini);
+        /*document.addEventListener("load", function listener(event) {
+            // the script can run a bit late some times, best to patch both load methods
+            if (!listener.app) {
+                listener.app = document.querySelector("ytd-app");
+            }
+            if (listener.app && listener.app.loadData) {
+                listener.app.loadData = detourLoadData(listener.app.loadData);
+                document.removeEventListener("load", listener, true);
+                console.info("hooked", document.readyState);
+            }
+        }, true);*/
+        // document.addEventListener("readystatechange", ini);
         //document.addEventListener("readystatechange", blacklist);
         //document.addEventListener("spfdone", blacklist);
         //yt-visibility-updated
         //document.addEventListener("yt-navigate-finish", blacklist); // material
         //document.addEventListener("yt-page-data-fetched", blacklist); // material
+
+        // HTMLDocument.prototype.querySelector = test(HTMLDocument.prototype.querySelector);
+        // HTMLDocument.prototype.querySelectorAll = test(HTMLDocument.prototype.querySelectorAll);
+        HTMLDocument.prototype.importNode = interceptImportNode(HTMLDocument.prototype.importNode);
 
     }
     function contentScriptMessages() {
@@ -411,11 +646,13 @@
     z-index: 1;
 }
 #avatar:not(:hover) .bytc-add-to-blacklist,
+#thumbnail:not(:hover) .bytc-add-to-blacklist,
 .ytd-thumbnail-0:not(:hover) .bytc-add-to-blacklist,
 .ytd-playlist-thumbnail-0:not(:hover) .bytc-add-to-blacklist {
     user-select: none;
 }
 #avatar:hover .bytc-add-to-blacklist,
+#thumbnail:hover .bytc-add-to-blacklist,
 .ytd-thumbnail-0:hover .bytc-add-to-blacklist,
 .ytd-playlist-thumbnail-0:hover .bytc-add-to-blacklist {
     opacity: .8;
@@ -426,11 +663,19 @@
     transform: translate(-50%, -50%);
     width: 16px;
 }
-#avatar {
+#avatar,
+#thumbnail {
     position: relative;
 }
 #avatar .bytc-add-to-blacklist {
-    top: 32px
+    /*top: 32px*/
+}
+yt-img-shadow.ytd-channel-renderer {
+    border-radius: 0;
+    position: relative;
+}
+yt-img-shadow:not(.ytd-channel-renderer) .bytc-add-to-blacklist {
+    display: none;
 }`;
             document.documentElement.appendChild(holder);
             holder = document.createElement("script");
@@ -455,3 +700,35 @@
     }
     contentScriptMessages();
 }());
+
+// reaction channels list
+// buzzfeed channels list
+
+// include verified tick in blacklist lists
+// material "dom-change" "yt-page-data-updated" "yt-page-data-fetched" "viewport-load" event? this.fire('yt-load-next-continuation', this.getContinuationUrl.bind(this))
+
+// whitelist mode - blocks all channels except the ones added to the whitelist
+
+/*
+list structure
+lista = {
+    UCID: [
+        channel_brand, :: string  :: default brand :: /channel/UCID .branded-page-header-title-link
+        username,      :: string  :: default empty :: /user/name
+        avatar,        :: string  :: default empty :: channel image url
+        disabled       :: boolean :: default false :: block ads on this channel
+    ]
+};
+*/
+
+/*
+"<svg viewBox='0 0 24 24'>" +
+"    <polygon points='24,2.1 21.9,0 12,9.9 2.1,0 0,2.1 9.9,12 0,21.9 2.1,24 12,14.1 21.9,24 24,21.9 14.1,12'/>" +
+"</svg>";
+"<svg class='bytc-add-to-blacklist-icon' viewBox='0 0 24 24'>" +
+"    <polygon points='24,1.4 22.6,0 12,10.6 1.4,0 0,1.4 10.6,12 0,22.6 1.4,24 12,13.4 22.6,24 24,22.6 13.4,12'/>" +
+"</svg>";
+"<svg class='bytc-add-to-blacklist-icon' viewBox='0 0 24 24'>" +
+"    <polygon points='24,2.8 21.2,0 12,9.2 2.8,0 0,2.8 9.2,12 0,21.2 2.8,24 12,14.8 21.2,24 24,21.2 14.8,12'/>" +
+"</svg>";
+*/
